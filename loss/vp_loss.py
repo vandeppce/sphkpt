@@ -21,12 +21,6 @@ from tensorflow.keras.layers import Input, Lambda, Dense, Dropout, Softmax, Flat
 from tensorflow.keras.layers import MaxPool2D, AvgPool2D, MaxPool3D, AvgPool3D
 from tensorflow.keras.initializers import HeUniform
 from scipy.ndimage import map_coordinates
-from yuv2rgb import yuv2rgb
-from transformer_crop import transformer_crop
-from utils import InstanceNormalization
-from AdvancedLayers import GroupConv2D
-from fast_soft_sort.tf_utils import soft_rank, soft_sort
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 def get_loss(keypoints1, keypoints2, keypoints_sphere1, keypoints_sphere2, description_image1, description_image2, features1, features2, num_kp=64):
     k1 = tf.squeeze(keypoints1)
@@ -98,5 +92,5 @@ def get_loss(keypoints1, keypoints2, keypoints_sphere1, keypoints_sphere2, descr
     
     # total_loss = des_loss + kp_loss + score_loss
     print(score_loss)
-    total_loss = des_loss + tf.exp(-1 * score_loss / (positive_cnt + 1))
+    total_loss = 0.5 * des_loss + 0.1 * tf.exp(-1 * score_loss / (positive_cnt + 1))
     return total_loss

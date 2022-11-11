@@ -21,14 +21,6 @@ from tensorflow.keras.layers import Input, Lambda, Dense, Dropout, Softmax, Flat
 from tensorflow.keras.layers import MaxPool2D, AvgPool2D, MaxPool3D, AvgPool3D
 from tensorflow.keras.initializers import HeUniform
 from scipy.ndimage import map_coordinates
-from yuv2rgb import yuv2rgb
-from utils import InstanceNormalization
-from AdvancedLayers import GroupConv2D
-from fast_soft_sort.tf_utils import soft_rank, soft_sort
-from PIL import Image
-from vp_model import _vp_model, SphericalProjection
-from erp_model import _erp_detector, _erp_descriptor
-os.environ['CUDA_VISIBLE_DEVICES'] = '3'
 
 def get_loss(erp_kpts, vp_kpts, erp_feature, num_kp = 64):
     vp_kpts = tf.cast(tf.convert_to_tensor(vp_kpts), tf.float32)
@@ -52,15 +44,13 @@ def get_loss(erp_kpts, vp_kpts, erp_feature, num_kp = 64):
         kp_min[i] = tf.gather(vp_kpts, minidx_present)
     
     kp_loss = 0.
-    score_loss = 0.
+
     features = tf.reshape(features, (256 * 512, -1))
-    
+
     # Don't need to label the positive or negative pairs!
     for i in range(64):
         kp_loss += dis_min[i] ** 2
-        score_loss += tf.gather(features,  tf.cast(erp_kpts[i][0] * 256 + erp_kpts[i][1], tf.int64))
-    # print(score_loss)
-    total_loss = kp_loss / 64 + tf.exp(-1 * score_loss / 64)
+
     total_loss = kp_loss / 64
-        # print(dis_min[i])
+
     return total_loss

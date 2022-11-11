@@ -21,18 +21,8 @@ from tensorflow.keras.layers import Input, Lambda, Dense, Dropout, Softmax, Flat
 from tensorflow.keras.layers import MaxPool2D, AvgPool2D, MaxPool3D, AvgPool3D
 from tensorflow.keras.initializers import HeUniform
 from scipy.ndimage import map_coordinates
-from yuv2rgb import yuv2rgb
-from utils import InstanceNormalization
-from AdvancedLayers import GroupConv2D
-from fast_soft_sort.tf_utils import soft_rank, soft_sort
-from PIL import Image
-from vp_model import _vp_model, SphericalProjection
-from erp_model1 import _erp_detector, _erp_descriptor, pers_crop
-from equilib import equi2equi
-from erp_model import get_grid
-os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 
-def get_vp_loss(keypoints_sphere1, keypoints_sphere2, description_image1, description_image2, e_kpts, e_description, num_kp = 64):
+def get_vp_loss(keypoints_sphere1, keypoints_sphere2, description_image1, description_image2, e_kpts, e_description, num_kp = 64, features1=None, features2=None):
     kp1 = tf.squeeze(keypoints_sphere1)
     kp2 = tf.squeeze(keypoints_sphere2)
     kpe = tf.squeeze(e_kpts)
@@ -78,17 +68,20 @@ def get_vp_loss(keypoints_sphere1, keypoints_sphere2, description_image1, descri
     vp_positive_cnt = 0.
     vp_negative_cnt = 0.
     vp_loss = 0.
-    
+    score_loss = 0.
     for i in range(num_kp):
         distance = tf.sqrt(tf.reduce_sum(tf.square(concate[i])))
         if tf.less(dis_min[i], 10):
             vp_positive_loss += distance ** 2
             vp_positive_cnt += 1.
+            score_loss += tf.reduce_mean(tf.gather(features1, tf.cast(kp1[i][0, 0] * 128 + kp1[i][0, 1], tf.int64)) +
+                tf.gather(features2, tf.cast(kp_min[i][0, 0] * 128 + kp_min[i][0, 1], tf.int64)))
         else:
             vp_negative_loss += (tf.maximum(margin - distance, 0) ** 2)
             vp_negative_cnt += 1.
     
-    vp_loss = (vp_positive_loss + vp_negative_loss) / 128
+    vp_loss = 0.5 * (vp_positive_loss + vp_negative_loss) / 128 + \
+              0.1 * tf.exp(-1 * score_loss / (vp_positive_cnt + 1))
     
     # vp1 to erp
     for i in range(num_kp):
@@ -164,7 +157,7 @@ def get_vp_loss(keypoints_sphere1, keypoints_sphere2, description_image1, descri
     ve2_loss = (ve2_positive_loss + ve2_negative_loss) / 128
     # print(vp_positive_cnt, ve1_positive_cnt, ve2_positive_cnt)
     total_loss = 0.
-    total_loss = vp_loss + ve1_loss + ve2_loss
+    total_loss = 0.1 * vp_loss + ve1_loss + ve2_loss
     return total_loss
     
 def get_erp_loss(erp_kpts, vp_kpts, erp_feature, num_kp = 64):
@@ -189,13 +182,10 @@ def get_erp_loss(erp_kpts, vp_kpts, erp_feature, num_kp = 64):
         kp_min[i] = tf.gather(vp_kpts, minidx_present)
     
     kp_loss = 0.
-    score_loss = 0.
     features = tf.reshape(features, (256 * 512, -1))
     
     # Don't need to label the positive or negative pairs!
     for i in range(64):
         kp_loss += dis_min[i] ** 2
-        score_loss += tf.gather(features,  tf.cast(erp_kpts[i][0] * 256 + erp_kpts[i][1], tf.int64))
-    total_loss = kp_loss / 64 + tf.exp(-1 * score_loss / 64)
     total_loss = kp_loss / 64
     return total_loss
