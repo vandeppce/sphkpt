@@ -8,48 +8,6 @@ from tensorflow.python.ops import nn_ops
 from tensorflow.python.keras import initializers, regularizers, constraints, activations
 from tensorflow.python.keras.utils import conv_utils
 
-
-def gaussian_init(shape, dtype=None, partition_info=None):
-    v = np.random.randn(*shape)
-    v = np.clip(v, -3, +3)
-    return K.constant(v, dtype=dtype)
-
-def conv_init_linear(shape, dtype=None, partition_info=None):
-    v = np.random.randn(*shape)
-    v = np.clip(v, -3, +3)
-    fan_in = np.prod(shape[:3])
-    v = v / (fan_in**0.5)
-    return K.constant(v, dtype=dtype)
-
-def conv_init_relu(shape, dtype=None, partition_info=None):
-    v = np.random.randn(*shape)
-    v = np.clip(v, -3, +3)
-    fan_in = np.prod(shape[:3])
-    v = v / (fan_in**0.5) * 2**0.5
-    return K.constant(v, dtype=dtype)
-
-def conv_init_relu2(shape, dtype=None, partition_info=None):
-    v = np.random.randn(*shape)
-    v = np.clip(v, -3, +3)
-    fan_in = np.prod(shape[:3])
-    v = v / (fan_in**0.5) * 2
-    return K.constant(v, dtype=dtype)
-
-def depthwiseconv_init_linear(shape, dtype=None, partition_info=None):
-    v = np.random.randn(*shape)
-    v = np.clip(v, -3, +3)
-    fan_in = np.prod(shape[:2])
-    v = v / (fan_in**0.5)
-    return K.constant(v, dtype=dtype)
-
-def depthwiseconv_init_relu(shape, dtype=None, partition_info=None):
-    v = np.random.randn(*shape)
-    v = np.clip(v, -3, +3)
-    fan_in = np.prod(shape[:2])
-    v = v / (fan_in**0.5) * 2**0.5
-    return K.constant(v, dtype=dtype)
-
-
 class Covn2DBaseLayer(Layer):
     """Basic Conv2D class from which other layers inherit.
     """
@@ -105,392 +63,6 @@ class Covn2DBaseLayer(Layer):
             'activity_regularizer': regularizers.serialize(self.activity_regularizer),
         })
         return config
-
-
-class Conv2D(Covn2DBaseLayer):
-    """Conv2D Layer with Weight Normalization.
-    
-    # Arguments
-        They are the same as for the normal Conv2D layer.
-        weightnorm: Boolean flag, whether Weight Normalization is used or not.
-        
-    # References
-        [Weight Normalization: A Simple Reparameterization to Accelerate Training of Deep Neural Networks](http://arxiv.org/abs/1602.07868)
-    """
-    def __init__(self, filters, kernel_size, weightnorm=False, eps=1e-6, **kwargs):
-        super(Conv2D, self).__init__(kernel_size, **kwargs)
-        
-        self.filters = filters
-        self.weightnorm = weightnorm
-        self.eps = eps
-    
-    def build(self, input_shape):
-        if type(input_shape) is list:
-            feature_shape = input_shape[0]
-        else:
-            feature_shape = input_shape
-        
-        self.kernel_shape = (*self.kernel_size, feature_shape[-1], self.filters)
-        self.kernel = self.add_weight(name='kernel',
-                                      shape=self.kernel_shape,
-                                      initializer=self.kernel_initializer,
-                                      regularizer=self.kernel_regularizer,
-                                      constraint=self.kernel_constraint,
-                                      trainable=True,
-                                      dtype=self.dtype)
-        
-        if self.weightnorm:
-            self.wn_g = self.add_weight(name='wn_g',
-                                        shape=(self.filters,),
-                                        initializer=initializers.Ones(),
-                                        trainable=True,
-                                        dtype=self.dtype)
-        
-        if self.use_bias:
-            self.bias = self.add_weight(name='bias',
-                                        shape=(self.filters,),
-                                        initializer=self.bias_initializer,
-                                        regularizer=self.bias_regularizer,
-                                        constraint=self.bias_constraint,
-                                        trainable=True,
-                                        dtype=self.dtype)
-        else:
-            self.bias = None
-        
-        super(Conv2D, self).build(input_shape)
-        
-    def call(self, inputs, **kwargs):
-        if type(inputs) is list:
-            features = inputs[0]
-        else:
-            features = inputs
-            
-        if self.weightnorm:
-            norm = tf.sqrt(tf.reduce_sum(tf.square(self.kernel), (0,1,2)) + self.eps)
-            kernel = self.kernel / norm * self.wn_g
-        else:
-            kernel = self.kernel
-        
-        features = K.conv2d(features, kernel,
-                            strides=self.strides,
-                            padding=self.padding,
-                            dilation_rate=self.dilation_rate)
-        
-        if self.use_bias:
-            features = tf.add(features, self.bias)
-        
-        if self.activation is not None:
-            features = self.activation(features)
-        
-        return features
-
-    def get_config(self):
-        config = super(Conv2D, self).get_config()
-        config.update({
-            'filters': self.filters,
-            'weightnorm': self.weightnorm,
-            'eps': self.eps,
-        })
-        return config
-
-
-class SparseConv2D(Covn2DBaseLayer):
-    """2D Sparse Convolution layer for sparse input data.
-    
-    # Arguments
-        They are the same as for the normal Conv2D layer.
-        binary: Boolean flag, whether the sparsity is propagated as binary 
-            mask or as float values.
-    
-    # Input shape
-        features: 4D tensor with shape (batch_size, rows, cols, channels)
-        mask: 4D tensor with shape (batch_size, rows, cols, 1)
-            If no mask is provided, all input pixels with features unequal 
-            to zero are considered as valid.
-    
-    # Example
-        x, m = SparseConv2D(32, 3, padding='same')(x)
-        x = Activation('relu')(x)
-        x, m = SparseConv2D(32, 3, padding='same')([x,m])
-        x = Activation('relu')(x)
-    
-    # Notes
-        Sparse Convolution propagates the sparsity of the input data
-        through the network using a 2D mask.
-    
-    # References
-        [Sparsity Invariant CNNs](https://arxiv.org/abs/1708.06500)
-    """
-    def __init__(self, filters, kernel_size,
-                 kernel_initializer=conv_init_relu,
-                 binary=True,
-                 **kwargs):
-        
-        super(SparseConv2D, self).__init__(kernel_size, kernel_initializer=kernel_initializer, **kwargs)
-        
-        self.filters = filters
-        self.binary = binary
-    
-    def build(self, input_shape):
-        if type(input_shape) is list:
-            feature_shape = input_shape[0]
-        else:
-            feature_shape = input_shape
-        
-        self.kernel_shape = (*self.kernel_size, feature_shape[-1], self.filters)
-        self.kernel = self.add_weight(name='kernel',
-                                      shape=self.kernel_shape,
-                                      initializer=self.kernel_initializer,
-                                      regularizer=self.kernel_regularizer,
-                                      constraint=self.kernel_constraint,
-                                      trainable=True,
-                                      dtype=self.dtype)
-        
-        self.mask_kernel_shape = (*self.kernel_size, 1, 1)
-        self.mask_kernel = tf.ones(self.mask_kernel_shape)
-        self.mask_fan_in = tf.reduce_prod(self.mask_kernel_shape[:3])
-        
-        if self.use_bias:
-            self.bias = self.add_weight(name='bias',
-                                        shape=(self.filters,),
-                                        initializer=self.bias_initializer,
-                                        regularizer=self.bias_regularizer,
-                                        constraint=self.bias_constraint,
-                                        trainable=True,
-                                        dtype=self.dtype)
-        else:
-            self.bias = None
-        
-        super(SparseConv2D, self).build(input_shape)
-    
-    def call(self, inputs, **kwargs):
-        if type(inputs) is list:
-            features = inputs[0]
-            mask = inputs[1]
-        else:
-            # if no mask is provided, get it from the features
-            features = inputs
-            mask = tf.where(tf.equal(tf.reduce_sum(features, axis=-1, keepdims=True), 0), 0.0, 1.0) 
-            
-        features = tf.multiply(features, mask)
-        features = nn_ops.convolution(features, self.kernel, self.padding.upper(), self.strides, self.dilation_rate)
-
-        norm = nn_ops.convolution(mask, self.mask_kernel, self.padding.upper(), self.strides, self.dilation_rate)
-        
-        mask_fan_in = tf.cast(self.mask_fan_in, 'float32')
-        
-        if self.binary:
-            mask = tf.where(tf.greater(norm,0), 1.0, 0.0)
-        else:
-            mask = norm / mask_fan_in
-        
-        #ratio = tf.where(tf.equal(norm,0), 0.0, 1/norm) # Note: The authors use this in the paper, but it would require special initialization...
-        ratio = tf.where(tf.equal(norm,0), 0.0, mask_fan_in/norm)
-        
-        features = tf.multiply(features, ratio)
-        
-        if self.use_bias:
-            features = tf.add(features, self.bias)
-        
-        if self.activation is not None:
-            features = self.activation(features)
-        
-        return [features, mask]
-    
-    def compute_output_shape(self, input_shape):
-        if type(input_shape) is list:
-            feature_shape = input_shape[0]
-        else:
-            feature_shape = input_shape
-        
-        space = feature_shape[1:-1]
-        new_space = []
-        for i in range(len(space)):
-            new_dim = conv_utils.conv_output_length(
-                space[i],
-                self.kernel_size[i],
-                padding=self.padding,
-                stride=self.strides[i],
-                dilation=self.dilation_rate[i])
-            new_space.append(new_dim)
-        
-        feature_shape = [feature_shape[0], *new_space, self.filters]
-        mask_shape = [*feature_shape[:-1], 1]
-        
-        return [feature_shape, mask_shape]
-
-    def get_config(self):
-        config = super(SparseConv2D, self).get_config()
-        config.update({
-            'filters': self.filters,
-            'binary': self.binary,
-        })
-        return config
-
-
-class PartialConv2D(Covn2DBaseLayer):
-    """2D Partial Convolution layer for sparse input data.
-        
-    # Arguments
-        They are the same as for the normal Conv2D layer.
-        binary: Boolean flag, whether the sparsity is propagated as binary 
-            mask or as float values.
-    
-    # Input shape
-        features: 4D tensor with shape (batch_size, rows, cols, channels)
-        mask: 4D tensor with shape (batch_size, rows, cols, channels)
-            If the shape is (batch_size, rows, cols, 1), the mask is repeated 
-            for each channel. If no mask is provided, all input elements 
-            unequal to zero are considered as valid.
-    
-    # Example
-        x, m = PartialConv2D(32, 3, padding='same')(x)
-        x = Activation('relu')(x)
-        x, m = PartialConv2D(32, 3, padding='same')([x,m])
-        x = Activation('relu')(x)
-    
-    # Notes
-        In contrast to Sparse Convolution, Partial Convolution propagates 
-        the sparsity for each channel separately. This makes it possible 
-        to concatenate the features and the masks from different branches 
-        in architecture.
-    
-    # References
-        [Image Inpainting for Irregular Holes Using Partial Convolutions](https://arxiv.org/abs/1804.07723)
-        [Sparsity Invariant CNNs](https://arxiv.org/abs/1708.06500)
-    """
-    def __init__(self, filters, kernel_size,
-                 kernel_initializer=conv_init_relu,
-                 binary=True,
-                 weightnorm=False,
-                 eps=1e-6,
-                 **kwargs):
-        
-        super(PartialConv2D, self).__init__(kernel_size, kernel_initializer=kernel_initializer, **kwargs)
-        
-        self.filters = filters
-        self.binary = binary
-        self.weightnorm = weightnorm
-        self.eps = eps
-    
-    def build(self, input_shape):
-        if type(input_shape) is list:
-            feature_shape = input_shape[0]
-            mask_shape = input_shape[1]
-            self.mask_shape = mask_shape
-        else:
-            feature_shape = input_shape
-            self.mask_shape = feature_shape
-        
-        self.kernel_shape = (*self.kernel_size, feature_shape[-1], self.filters)
-        self.kernel = self.add_weight(name='kernel',
-                                      shape=self.kernel_shape,
-                                      initializer=self.kernel_initializer,
-                                      regularizer=self.kernel_regularizer,
-                                      constraint=self.kernel_constraint,
-                                      trainable=True,
-                                      dtype=self.dtype)
-        
-        self.mask_kernel_shape = (*self.kernel_size, feature_shape[-1], self.filters)
-        self.mask_kernel = tf.ones(self.mask_kernel_shape)
-        self.mask_fan_in = tf.reduce_prod(self.mask_kernel_shape[:3])
-        
-        if self.weightnorm:
-            self.wn_g = self.add_weight(name='wn_g',
-                                        shape=(self.filters,),
-                                        initializer=initializers.Ones(),
-                                        trainable=True,
-                                        dtype=self.dtype)
-        
-        if self.use_bias:
-            self.bias = self.add_weight(name='bias',
-                                        shape=(self.filters,),
-                                        initializer=self.bias_initializer,
-                                        regularizer=self.bias_regularizer,
-                                        constraint=self.bias_constraint,
-                                        trainable=True,
-                                        dtype=self.dtype)
-        else:
-            self.bias = None
-        
-        super(PartialConv2D, self).build(input_shape)
-    
-    def call(self, inputs, **kwargs):
-        if type(inputs) is list:
-            features = inputs[0]
-            mask = inputs[1]
-            # if mask has only one channel, repeat
-            if self.mask_shape[-1] == 1:
-                mask = tf.repeat(mask, tf.shape(features)[-1], axis=-1)
-        else:
-            # if no mask is provided, get it from the features
-            features = inputs
-            mask = tf.where(tf.equal(features, 0), 0.0, 1.0)
-        
-        if self.weightnorm:
-            norm = tf.sqrt(tf.reduce_sum(tf.square(self.kernel), (0,1,2)) + self.eps)
-            kernel = self.kernel / norm * self.wn_g
-        else:
-            kernel = self.kernel
-        
-        mask_kernel = self.mask_kernel
-        
-        features = tf.multiply(features, mask)
-        features = nn_ops.convolution(features, kernel, self.padding.upper(), self.strides, self.dilation_rate)
-        
-        norm = nn_ops.convolution(mask, mask_kernel, self.padding.upper(), self.strides, self.dilation_rate)
-        
-        mask_fan_in = tf.cast(self.mask_fan_in, 'float32')
-        
-        if self.binary:
-            mask = tf.where(tf.greater(norm,0), 1.0, 0.0)
-        else:
-            mask = norm / mask_fan_in
-        
-        ratio = tf.where(tf.equal(norm,0), 0.0, mask_fan_in/norm)
-        
-        features = tf.multiply(features, ratio)
-        
-        if self.use_bias:
-            features = tf.add(features, self.bias)
-        
-        if self.activation is not None:
-            features = self.activation(features)
-        
-        return [features, mask]
-    
-    def compute_output_shape(self, input_shape):
-        if type(input_shape) is list:
-            feature_shape = input_shape[0]
-        else:
-            feature_shape = input_shape
-        
-        space = feature_shape[1:-1]
-        new_space = []
-        for i in range(len(space)):
-            new_dim = conv_utils.conv_output_length(
-                space[i],
-                self.kernel_size[i],
-                padding=self.padding,
-                stride=self.strides[i],
-                dilation=self.dilation_rate[i])
-            new_space.append(new_dim)
-        
-        feature_shape = [feature_shape[0], *new_space, self.filters]
-        mask_shape = [feature_shape[0], *new_space, self.filters]
-        
-        return [feature_shape, mask_shape]
-
-    def get_config(self):
-        config = super(PartialConv2D, self).get_config()
-        config.update({
-            'filters': self.filters,
-            'binary': self.binary,
-            'weightnorm': self.weightnorm,
-            'eps': self.eps,
-        })
-        return config
-
 
 class GroupConv2D(Covn2DBaseLayer):
     """2D Group Convolution layer that shares weights over symmetries.
@@ -674,677 +246,366 @@ class GroupConv2D(Covn2DBaseLayer):
         return config
 
 
-class DeformableConv2D(Covn2DBaseLayer):
-    """2D Deformable Convolution layer that learns the spatial offsets where 
-    the input elements of the convolution are sampled.
-    
-    The layer is basically a updated version of An Jiaoyang's code.
-    
-    # Notes
-        - A layer does not use a native CUDA kernel which would have better 
-          performance https://github.com/tensorflow/addons/issues/179
-    
-    # References
-        [Deformable Convolutional Networks](https://arxiv.org/abs/1703.06211)
-    
-    # related code
-        https://github.com/DHZS/tf-deformable-conv-layer (An Jiaoyang, 2018-10-11)
+def rotation_matrix(axis, theta):
     """
-    
-    def __init__(self, filters, kernel_size, num_deformable_group=None, **kwargs):
-        """`kernel_size`, `strides` and `dilation_rate` must have the same value in both axis.
-        
-        :param num_deformable_group: split output channels into groups, offset shared in each group. If
-        this parameter is None, then set num_deformable_group=filters.
-        """
-        super(DeformableConv2D, self).__init__(kernel_size, **kwargs)
-        
-        if not self.kernel_size[0] == self.kernel_size[1]:
-            raise ValueError('Requires square kernel')
-        if not self.strides[0] == self.strides[1]:
-            raise ValueError('Requires equal stride')
-        if not self.dilation_rate[0] == self.dilation_rate[1]:
-            raise ValueError('Requires equal dilation')
-        
+    Return the rotation matrix associated with counterclockwise rotation about
+    the given axis by theta radians.
+    """
+    axis = np.asarray(axis)
+    axis = axis / math.sqrt(np.dot(axis, axis))
+    a = math.cos(theta / 2.0)
+    b, c, d = -axis * math.sin(theta / 2.0)
+    aa, bb, cc, dd = a * a, b * b, c * c, d * d
+    bc, ad, ac, ab, bd, cd = b * c, a * d, a * c, a * b, b * d, c * d
+    return np.array(
+        [
+            [aa + bb - cc - dd, 2 * (bc + ad), 2 * (bd - ac)],
+            [2 * (bc - ad), aa + cc - bb - dd, 2 * (cd + ab)],
+            [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc],
+        ]
+    )
+
+
+def equi_coord(pano_W, pano_H, k_W, k_H, u, v):
+    fov_w = k_W * np.deg2rad(360.0 / float(pano_W))
+    focal = (float(k_W) / 2) / np.tan(fov_w / 2)
+    c_x = 0
+    c_y = 0
+
+    u_r, v_r = u, v
+    u_r, v_r = u_r - float(pano_W) / 2.0, v_r - float(pano_H) / 2.0
+    phi, theta = u_r / (pano_W) * (np.pi) * 2, -v_r / (pano_H) * (np.pi)
+
+    ROT = rotation_matrix((0, 1, 0), phi)
+    ROT = np.matmul(ROT, rotation_matrix((1, 0, 0), theta))  # np.eye(3)
+
+    h_range = np.array(range(k_H))
+    w_range = np.array(range(k_W))
+    w_ones = np.ones(k_W)
+    h_ones = np.ones(k_H)
+    h_grid = (
+            np.matmul(np.expand_dims(h_range, -1), np.expand_dims(w_ones, 0))
+            + 0.5
+            - float(k_H) / 2
+    )
+    w_grid = (
+            np.matmul(np.expand_dims(h_ones, -1), np.expand_dims(w_range, 0))
+            + 0.5
+            - float(k_W) / 2
+    )
+
+    K = np.array([[focal, 0, c_x], [0, focal, c_y], [0.0, 0.0, 1.0]])
+    inv_K = np.linalg.inv(K)
+    rays = np.stack([w_grid, h_grid, np.ones(h_grid.shape)], 0)
+    rays = np.matmul(inv_K, rays.reshape(3, k_H * k_W))
+    rays /= np.linalg.norm(rays, axis=0, keepdims=True)
+    rays = np.matmul(ROT, rays)
+    rays = rays.reshape((3, k_H, k_W))
+
+    phi = np.arctan2(rays[0, ...], rays[2, ...])
+    theta = np.arcsin(np.clip(rays[1, ...], -1, 1))
+    x = (pano_W) / (2.0 * np.pi) * phi + float(pano_W) / 2.0
+    y = (pano_H) / (np.pi) * theta + float(pano_H) / 2.0
+
+    roi_y = h_grid + v_r + float(pano_H) / 2.0
+    roi_x = w_grid + u_r + float(pano_W) / 2.0
+
+    new_roi_y = y
+    new_roi_x = x
+
+    offsets_x = new_roi_x - roi_x
+    offsets_y = new_roi_y - roi_y
+
+    return offsets_x, offsets_y
+
+
+def equi_coord_fixed_resoltuion(pano_W, pano_H, k_W, k_H, u, v, pano_Hf=-1, pano_Wf=-1):
+    pano_Hf = pano_H if pano_Hf <= 0 else pano_H / pano_Hf
+    pano_Wf = pano_W if pano_Wf <= 0 else pano_W / pano_Wf
+    fov_w = k_W * np.deg2rad(360.0 / float(pano_Wf))
+    focal = (float(k_W) / 2) / np.tan(fov_w / 2)
+    c_x = 0
+    c_y = 0
+
+    u_r, v_r = u, v
+    u_r, v_r = u_r - float(pano_W) / 2.0, v_r - float(pano_H) / 2.0
+    phi, theta = u_r / (pano_W) * (np.pi) * 2, -v_r / (pano_H) * (np.pi)
+
+    ROT = rotation_matrix((0, 1, 0), phi)
+    ROT = np.matmul(ROT, rotation_matrix((1, 0, 0), theta))  # np.eye(3)
+
+    h_range = np.array(range(k_H))
+    w_range = np.array(range(k_W))
+    w_ones = np.ones(k_W)
+    h_ones = np.ones(k_H)
+    h_grid = (
+            np.matmul(np.expand_dims(h_range, -1), np.expand_dims(w_ones, 0))
+            + 0.5
+            - float(k_H) / 2
+    )
+    w_grid = (
+            np.matmul(np.expand_dims(h_ones, -1), np.expand_dims(w_range, 0))
+            + 0.5
+            - float(k_W) / 2
+    )
+
+    K = np.array([[focal, 0, c_x], [0, focal, c_y], [0.0, 0.0, 1.0]])
+    inv_K = np.linalg.inv(K)
+    rays = np.stack([w_grid, h_grid, np.ones(h_grid.shape)], 0)
+    rays = np.matmul(inv_K, rays.reshape(3, k_H * k_W))
+    rays /= np.linalg.norm(rays, axis=0, keepdims=True)
+    rays = np.matmul(ROT, rays)
+    rays = rays.reshape((3, k_H, k_W))
+
+    phi = np.arctan2(rays[0, ...], rays[2, ...])
+    theta = np.arcsin(np.clip(rays[1, ...], -1, 1))
+    x = (pano_W) / (2.0 * np.pi) * phi + float(pano_W) / 2.0
+    y = (pano_H) / (np.pi) * theta + float(pano_H) / 2.0
+
+    roi_y = h_grid + v_r + float(pano_H) / 2.0
+    roi_x = w_grid + u_r + float(pano_W) / 2.0
+
+    new_roi_y = y
+    new_roi_x = x
+
+    offsets_x = new_roi_x - roi_x
+    offsets_y = new_roi_y - roi_y
+
+    return offsets_x, offsets_y
+
+
+def distortion_aware_map(pano_W, pano_H, k_W, k_H, s_width=10, s_height=10, bs=16):
+    offset = np.zeros(shape=[pano_H, pano_W, k_H * k_W * 2])
+
+    for v in range(0, pano_H, s_height):
+        u = 0
+        offsets_x, offsets_y = equi_coord_fixed_resoltuion(
+            pano_W, pano_H, k_W, k_H, u, v, 1, 1
+        )
+
+        # lower edge
+        for i in range(1, k_W - 1):
+            offsets_y[-1][i] = offsets_y[-1][0]
+
+        # left edge
+        k = (offsets_x[0][0] - offsets_x[-1][0]) / (offsets_y[0][0] - offsets_y[-1][0])
+        c = offsets_x[0][0] - k * offsets_y[0][0]
+        for i in range(1, k_H - 1):
+            offsets_x[i][0] = k * offsets_y[i][0] + c
+
+        # right edge
+        k = (offsets_x[0][-1] - offsets_x[-1][-1]) / (offsets_y[0][-1] - offsets_y[-1][-1])
+        c = offsets_x[0][-1] - k * offsets_y[0][-1]
+        for i in range(1, k_H - 1):
+            offsets_x[i][-1] = k * offsets_y[i][-1] + c
+
+        offsets = np.concatenate(
+            (np.expand_dims(offsets_y, -1), np.expand_dims(offsets_x, -1)), axis=-1
+        )
+        total_offsets = offsets.flatten().astype("float32")
+        offset[v, u, :] = total_offsets
+
+        for v_ in range(s_height):
+            for u_ in range(pano_W):
+                try:
+                    offset[v + v_, u + u_, :] = total_offsets
+                except:
+                    pass
+
+    offset = tf.constant(offset)
+    offset = tf.expand_dims(offset, 0)
+    offset = tf.tile(offset, multiples=[bs, 1, 1, 1])
+    offset = tf.cast(offset, tf.float32)
+
+    return offset
+
+
+class CHConv(tf.keras.layers.Layer):
+    @typechecked
+    def __init__(
+            self,
+            filters: int,
+            kernel_size: tuple = (3, 3),
+            num_groups: int = 1,
+            deformable_groups: int = 1,
+            strides: tuple = (1, 1),
+            im2col: int = 1,
+            s_strides: int = 10,
+            use_bias: bool = False,
+            padding: str = "valid",
+            data_format: str = "channels_last",
+            dilations: tuple = (1, 1),
+            use_relu: bool = False,
+            kernel_initializer: types.Initializer = None,
+            kernel_regularizer: types.Regularizer = None,
+            kernel_constraint: types.Constraint = None,
+            **kwargs
+    ):
+        super(CHConv, self).__init__(**kwargs)
         self.filters = filters
-        if num_deformable_group is None:
-            num_deformable_group = filters
-        if filters % num_deformable_group != 0:
-            raise ValueError('"filters" mod "num_deformable_group" must be zero')
-        self.num_deformable_group = num_deformable_group
-        
-        self.kernel = None
-        self.bias = None
-        self.offset_layer_kernel = None
-        self.offset_layer_bias = None
-    
+        self.kernel_size = kernel_size
+        self.num_groups = num_groups
+        self.deformable_groups = deformable_groups
+        self.strides = strides
+        self.im2col = im2col
+        self.s_strides = s_strides
+        self.use_bias = use_bias
+        self.padding = padding
+        self.data_format = data_format
+        self.dilations = dilations
+        self.use_relu = use_relu
+        self.kernel_initializer = tf.keras.initializers.get(kernel_initializer)
+        self.kernel_regularizer = tf.keras.regularizers.get(kernel_regularizer)
+        self.kernel_constraint = tf.keras.constraints.get(kernel_constraint)
+        if self.padding == "valid":
+            self.tf_pad = "VALID"
+        else:
+            self.tf_pad = "SAME"
+
     def build(self, input_shape):
-        
-        input_dim = input_shape[-1]
-        # kernel_shape = self.kernel_size + (input_dim, self.filters)
-        # we want to use depth-wise conv
-        kernel_shape = self.kernel_size + (self.filters * input_dim, 1)
-        self.kernel = self.add_weight(name='kernel',
-                        shape=kernel_shape,
-                        initializer=self.kernel_initializer,
-                        regularizer=self.kernel_regularizer,
-                        constraint=self.kernel_constraint,
-                        trainable=True,
-                        dtype=self.dtype)
+        if self.data_format == "channels_last":
+            channel = int(input_shape[-1])
+        else:
+            channel = int(input_shape[1])
+        self.kernel = self.add_weight(
+            shape=[self.filters, channel, self.kernel_size[0], self.kernel_size[1]],
+            initializer=self.kernel_initializer,
+            regularizer=self.kernel_regularizer,
+            constraint=self.kernel_constraint,
+            trainable=True,
+            name="w"
+        )
+        self.scale = self.add_weight(
+            shape=[input_shape[1], input_shape[2], self.kernel_size[0] * self.kernel_size[1] * 2],
+            initializer=tf.keras.initializers.Constant(value=1.),
+            regularizer=self.kernel_regularizer,
+            constraint=tf.keras.constraints.MinMaxNorm(min_value=0.5, max_value=1.5, rate=1.0, axis=0),
+            trainable=True,
+            name="s"
+        )
+
         if self.use_bias:
-            self.bias = self.add_weight(name='bias',
-                            shape=(self.filters,),
-                            initializer=self.bias_initializer,
-                            regularizer=self.bias_regularizer,
-                            constraint=self.bias_constraint,
-                            trainable=True,
-                            dtype=self.dtype)
-        
-        # create offset conv layer
-        offset_num = self.kernel_size[0] * self.kernel_size[1] * self.num_deformable_group
-        self.offset_layer_kernel = self.add_weight(name='offset_layer_kernel',
-                        shape=self.kernel_size + (input_dim, offset_num * 2),  # 2 means x and y axis
-                        initializer=tf.zeros_initializer(),
-                        regularizer=self.kernel_regularizer,
-                        trainable=True,
-                        dtype=self.dtype)
-        self.offset_layer_bias = self.add_weight(name='offset_layer_bias',
-                        shape=(offset_num * 2,),
-                        initializer=tf.zeros_initializer(),
-                        # initializer=tf.random_uniform_initializer(-5, 5),
-                        regularizer=self.bias_regularizer,
-                        trainable=True,
-                        dtype=self.dtype)
+            self.bias = self.add_weight(
+                shape=[1, self.filters, 1, 1],
+                initializer=self.kernel_initializer,
+                regularizer=self.kernel_regularizer,
+                constraint=self.kernel_constraint,
+                trainable=True,
+            )
         self.built = True
-    
-    def call(self, inputs, training=None, **kwargs):
-        # get offset, shape [batch_size, out_h, out_w, filter_h, * filter_w * channel_out * 2]
-        offset = tf.nn.conv2d(inputs,
-                              filters=self.offset_layer_kernel,
-                              strides=[1, *self.strides, 1],
-                              padding=self.padding.upper(),
-                              dilations=[1, *self.dilation_rate, 1])
-        offset += self.offset_layer_bias
-        
-        # add padding if needed
-        inputs = self._pad_input(inputs)
-        
-        # some length
-        batch_size = tf.shape(inputs)[0]
-        channel_in = int(inputs.shape[-1])
-        
-        in_h, in_w = [int(i) for i in inputs.shape[1: 3]]  # input feature map size
-        out_h, out_w = [int(i) for i in offset.shape[1: 3]]  # output feature map size
-        filter_h, filter_w = self.kernel_size
-        
-        # get x, y axis offset
-        offset = tf.reshape(offset, [batch_size, out_h, out_w, -1, 2])
-        y_off, x_off = offset[:, :, :, :, 0], offset[:, :, :, :, 1]
-        
-        # input feature map gird coordinates
-        y, x = self._get_conv_indices([in_h, in_w])
-        y, x = [tf.expand_dims(i, axis=-1) for i in [y, x]]
-        y, x = [tf.tile(i, [batch_size, 1, 1, 1, self.num_deformable_group]) for i in [y, x]]
-        y, x = [tf.reshape(i, [batch_size, *i.shape[1: 3], -1]) for i in [y, x]]
-        y, x = [tf.cast(i, 'float32') for i in [y, x]]
-        
-        # add offset
-        y, x = y + y_off, x + x_off
-        y = tf.clip_by_value(y, 0, in_h - 1)
-        x = tf.clip_by_value(x, 0, in_w - 1)
-        
-        # get four coordinates of points around (x, y)
-        y0, x0 = [tf.cast(tf.floor(i), 'int32') for i in [y, x]]
-        y1, x1 = y0 + 1, x0 + 1
-        # clip
-        y0, y1 = [tf.clip_by_value(i, 0, in_h - 1) for i in [y0, y1]]
-        x0, x1 = [tf.clip_by_value(i, 0, in_w - 1) for i in [x0, x1]]
-        
-        # get pixel values
-        indices = [[y0, x0], [y0, x1], [y1, x0], [y1, x1]]
-        p0, p1, p2, p3 = [DeformableConv2D._get_pixel_values_at_point(inputs, i) for i in indices]
-        
-        # cast to float
-        x0, x1, y0, y1 = [tf.cast(i, 'float32') for i in [x0, x1, y0, y1]]
-        # weights
-        w0 = (y1 - y) * (x1 - x)
-        w1 = (y1 - y) * (x - x0)
-        w2 = (y - y0) * (x1 - x)
-        w3 = (y - y0) * (x - x0)
-        # expand dim for broadcast
-        w0, w1, w2, w3 = [tf.expand_dims(i, axis=-1) for i in [w0, w1, w2, w3]]
-        # bilinear interpolation
-        pixels = tf.add_n([w0 * p0, w1 * p1, w2 * p2, w3 * p3])
-        
-        # reshape the "big" feature map
-        pixels = tf.reshape(pixels, [batch_size, out_h, out_w, filter_h, filter_w, self.num_deformable_group, channel_in])
-        pixels = tf.transpose(pixels, [0, 1, 3, 2, 4, 5, 6])
-        pixels = tf.reshape(pixels, [batch_size, out_h * filter_h, out_w * filter_w, self.num_deformable_group, channel_in])
-        
-        # copy channels to same group
-        feat_in_group = self.filters // self.num_deformable_group
-        pixels = tf.tile(pixels, [1, 1, 1, 1, feat_in_group])
-        pixels = tf.reshape(pixels, [batch_size, out_h * filter_h, out_w * filter_w, -1])
-        
-        # depth-wise conv
-        out = tf.nn.depthwise_conv2d(pixels, self.kernel, [1, filter_h, filter_w, 1], 'VALID')
-        # add the output feature maps in the same group
-        out = tf.reshape(out, [batch_size, out_h, out_w, self.filters, channel_in])
-        out = tf.reduce_sum(out, axis=-1)
-        if self.use_bias:
-            out += self.bias
-        return self.activation(out)
-    
-    def _pad_input(self, inputs):
-        """Check if input feature map needs padding, because we don't use the standard Conv() function.
-        
-        :param inputs:
-        :return: padded input feature map
-        """
-        # When padding is 'same', we should pad the feature map.
-        # if padding == 'same', output size should be `ceil(input / stride)`
-        if self.padding == 'same':
-            in_shape = inputs.shape.as_list()[1:3]
-            padding_list = []
-            for i in range(2):
-                filter_size = self.kernel_size[i]
-                dilation = self.dilation_rate[i]
-                dilated_filter_size = filter_size + (filter_size - 1) * (dilation - 1)
-                same_output = (in_shape[i] + self.strides[i] - 1) // self.strides[i]
-                valid_output = (in_shape[i] - dilated_filter_size + self.strides[i]) // self.strides[i]
-                if same_output == valid_output:
-                    padding_list += [0, 0]
-                else:
-                    p = dilated_filter_size - 1
-                    p_0 = p // 2
-                    padding_list += [p_0, p - p_0]
-            if sum(padding_list) != 0:
-                padding = [[0, 0],
-                           [padding_list[0], padding_list[1]],  # top, bottom padding
-                           [padding_list[2], padding_list[3]],  # left, right padding
-                           [0, 0]]
-                inputs = tf.pad(inputs, padding)
-        return inputs
-    
-    def _get_conv_indices(self, feature_map_size):
-        """the x, y coordinates in the window when a filter sliding on the feature map
-        :param feature_map_size:
-        :return: y, x with shape [1, out_h, out_w, filter_h * filter_w]
-        """
-        feat_h, feat_w = [int(i) for i in feature_map_size[0: 2]]
 
-        x, y = tf.meshgrid(tf.range(feat_w), tf.range(feat_h))
-        x, y = [tf.reshape(i, [1, *i.get_shape(), 1]) for i in [x, y]]  # shape [1, h, w, 1]
-        x, y = [tf.image.extract_patches(i,
-                                         [1, *self.kernel_size, 1],
-                                         [1, *self.strides, 1],
-                                         [1, *self.dilation_rate, 1],
-                                         'VALID')
-                for i in [x, y]]  # shape [1, out_h, out_w, filter_h * filter_w]
-        return y, x
-
-    @staticmethod
-    def _get_pixel_values_at_point(inputs, indices):
-        """get pixel values
-        :param inputs:
-        :param indices: shape [batch_size, H, W, I], I = filter_h * filter_w * channel_out
-        :return:
-        """
-        y, x = indices
-        batch, h, w, n = y.shape.as_list()[0: 4]
-        
-        y_shape = tf.shape(y)
-        batch, n = y_shape[0], y_shape[3]
-        
-        batch_idx = tf.reshape(tf.range(0, batch), (batch, 1, 1, 1))
-        b = tf.tile(batch_idx, (1, h, w, n))
-        pixel_idx = tf.stack([b, y, x], axis=-1)
-        return tf.gather_nd(inputs, pixel_idx)
-
-
-class DepthwiseConv2D(Covn2DBaseLayer):
-    """2D depthwise convolution layer.
-    
-    # Notes
-        A DepthwiseConv2D layer followed by an 1x1 Conv2D layer is equivalent
-        to the SeparableConv2D layer provided by Keras.
-    
-    # References
-        [Xception: Deep Learning with Depthwise Separable Convolutions](http://arxiv.org/abs/1610.02357)
-    """
-    def __init__(self, depth_multiplier, kernel_size,
-                 kernel_initializer=depthwiseconv_init_relu,
-                 **kwargs):
-        super(DepthwiseConv2D, self).__init__(kernel_size, kernel_initializer=kernel_initializer, **kwargs)
-        
-        self.depth_multiplier = depth_multiplier
-        
-    def build(self, input_shape):
-        if type(input_shape) is list:
-            feature_shape = input_shape[0]
-        else:
-            feature_shape = input_shape
-        
-        kernel_shape = (*self.kernel_size, feature_shape[-1], self.depth_multiplier)
-        
-        self.kernel = self.add_weight(name='kernel',
-                                      shape=kernel_shape,
-                                      initializer=self.kernel_initializer,
-                                      regularizer=self.kernel_regularizer,
-                                      constraint=self.kernel_constraint,
-                                      trainable=True,
-                                      dtype=self.dtype)
-        if self.use_bias:
-            self.bias = self.add_weight(name='bias',
-                                        shape=(feature_shape[-1]*self.depth_multiplier,),
-                                        initializer=self.bias_initializer,
-                                        regularizer=self.bias_regularizer,
-                                        constraint=self.bias_constraint,
-                                        trainable=True,
-                                        dtype=self.dtype)
-        else:
-            self.bias = None
-        
-        super(DepthwiseConv2D, self).build(input_shape)
-    
-    def call(self, inputs, **kwargs):
-        if type(inputs) is list:
-            features = inputs[0]
-        else:
-            features = inputs
-        
-        features = K.depthwise_conv2d(features, self.kernel,
-                                      strides=self.strides,
-                                      padding=self.padding,
-                                      dilation_rate=self.dilation_rate)
-        
-        if self.use_bias:
-            features = tf.add(features, self.bias)
-        
-        if self.activation is not None:
-            features = self.activation(features)
-        
-        return features
-    
     def compute_output_shape(self, input_shape):
-        if type(input_shape) is list:
-            feature_shape = input_shape[0]
+        input_shape = tf.TensorShape(input_shape).as_list()
+        if self.data_format == "channels_last":
+            space = input_shape[1:-1]
+            new_space = []
+            for i in range(len(space)):
+                new_dim = conv_utils.conv_output_length(
+                    space[i],
+                    self.kernel_size[i],
+                    padding=self.padding,
+                    stride=self.strides[i],
+                    dilation=self.dilation_rate[i],
+                )
+                new_space.append(new_dim)
+            return tf.TensorShape([input_shape[0]] + new_space + [self.filters])
         else:
-            feature_shape = input_shape
-        
-        space = feature_shape[1:-1]
-        new_space = []
-        for i in range(len(space)):
-            new_dim = conv_utils.conv_output_length(
-                space[i],
-                self.kernel_size[i],
-                padding=self.padding,
-                stride=self.strides[i],
-                dilation=self.dilation_rate[i])
-            new_space.append(new_dim)
-        
-        feature_shape = [feature_shape[0], *new_space, feature_shape[-1]*self.depth_multiplier]
-        
-        return feature_shape
-    
-    def get_config(self):
-        config = super(DepthwiseConv2D, self).get_config()
-        config.update({
-            'depth_multiplier': self.depth_multiplier,
-        })
-        return config
-
-
-class MaxPoolingWithArgmax2D(Layer):
-    '''MaxPooling for unpooling with indices.
-    
-    # References
-        [SegNet: A Deep Convolutional Encoder-Decoder Architecture for Image Segmentation](http://arxiv.org/abs/1511.00561)
-    
-    # related code:
-        https://github.com/PavlosMelissinos/enet-keras
-        https://github.com/ykamikawa/SegNet
-    '''
-    def __init__(self, pool_size=(2, 2), strides=(2, 2), padding='same', **kwargs):
-        super(MaxPoolingWithArgmax2D, self).__init__(**kwargs)
-        self.pool_size = conv_utils.normalize_tuple(pool_size, 2, 'pool_size')
-        self.strides = conv_utils.normalize_tuple(strides, 2, 'strides')
-        self.padding = conv_utils.normalize_padding(padding)
+            space = input_shape[2:]
+            new_space = []
+            for i in range(len(space)):
+                new_dim = conv_utils.conv_output_length(
+                    space[i],
+                    self.kernel_size[i],
+                    padding=self.padding,
+                    stride=self.strides[i],
+                    dilation=self.dilation_rate[i],
+                )
+                new_space.append(new_dim)
+            return tf.TensorShape([input_shape[0], self.filters] + new_space)
 
     def call(self, inputs, **kwargs):
-        ksize = [1, self.pool_size[0], self.pool_size[1], 1]
-        strides = [1, self.strides[0], self.strides[1], 1]
-        padding = self.padding.upper()
-        output, argmax = nn_ops.max_pool_with_argmax(inputs, ksize, strides, padding)
-        argmax = tf.cast(argmax, K.floatx())
-        return [output, argmax]
-    
-    def compute_output_shape(self, input_shape):
-        ratio = (1, 2, 2, 1)
-        output_shape = [dim // ratio[idx] if dim is not None else None for idx, dim in enumerate(input_shape)]
-        output_shape = tuple(output_shape)
-        return [output_shape, output_shape]
-
-    def compute_mask(self, inputs, mask=None):
-        return 2 * [None]
-    
-    def get_config(self):
-        config = super(MaxPoolingWithArgmax2D, self).get_config()
-        config.update({
-            'pool_size': self.pool_size,
-            'strides': self.strides,
-            'padding': self.padding,
-        })
-        return config
-
-
-class MaxUnpooling2D(Layer):
-    '''Inversion of MaxPooling with indices.
-    
-    # References
-        [SegNet: A Deep Convolutional Encoder-Decoder Architecture for Image Segmentation](http://arxiv.org/abs/1511.00561)
-    
-    # related code:
-        https://github.com/PavlosMelissinos/enet-keras
-        https://github.com/ykamikawa/SegNet
-    '''
-    def __init__(self, size=(2, 2), **kwargs):
-        super(MaxUnpooling2D, self).__init__(**kwargs)
-        self.size = conv_utils.normalize_tuple(size, 2, 'size')
-
-    def call(self, inputs, output_shape=None):
-        updates, mask = inputs[0], inputs[1]
-        
-        mask = tf.cast(mask, 'int32')
-        input_shape = tf.shape(updates, out_type='int32')
-        #  calculation new shape
-        if output_shape is None:
-            output_shape = (input_shape[0], input_shape[1] * self.size[0], input_shape[2] * self.size[1], input_shape[3])
-        
-        # calculation indices for batch, height, width and feature maps
-        one_like_mask = K.ones_like(mask, dtype='int32')
-        batch_shape = K.concatenate([[input_shape[0]], [1], [1], [1]], axis=0)
-        batch_range = K.reshape(tf.range(output_shape[0], dtype='int32'), shape=batch_shape)
-        b = one_like_mask * batch_range
-        y = mask // (output_shape[2] * output_shape[3])
-        x = (mask // output_shape[3]) % output_shape[2]
-        feature_range = tf.range(output_shape[3], dtype='int32')
-        f = one_like_mask * feature_range
-        
-        # transpose indices & reshape update values to one dimension
-        updates_size = tf.size(updates)
-        indices = K.transpose(K.reshape(K.stack([b, y, x, f]), [4, updates_size]))
-        values = K.reshape(updates, [updates_size])
-        ret = tf.scatter_nd(indices, values, output_shape)
-        return ret
-    
-    def compute_output_shape(self, input_shape):
-        mask_shape = input_shape[1]
-        output_shape = [mask_shape[0], mask_shape[1] * self.size[0], mask_shape[2] * self.size[1], mask_shape[3]]
-        return tuple(output_shape)
-    
-    def get_config(self):
-        config = super(MaxUnpooling2D, self).get_config()
-        config.update({
-            'size': self.size,
-        })
-        return config
-
-
-class AddCoords2D(Layer):
-    """Add coords to a tensor as described in CoordConv paper.
-    # Arguments
-        with_r: Boolean flag, whether the r coordinate is added or not. See paper for more details.
-    
-    # Input shape
-        featurs: 4D tensor with shape (batch_size, rows, cols, channels)
-    # Output shape
-        featurs: same as input except channels + 2, channels + 3 if with_r is True
-    
-    # Example
-        x = Conv2D(32, 3, padding='same', activation='relu')(x)
-        x = AddCoords2D()(x)
-        x = Conv2D(32, 3, padding='same', activation='relu')(x)
-    
-    # References
-        [An Intriguing Failing of Convolutional Neural Networks and the CoordConv Solution](http://arxiv.org/abs/1807.03247)
-    """
-    def __init__(self, with_r=False, **kwargs):
-        super(AddCoords2D, self).__init__(**kwargs)
-        self.with_r = with_r
-        
-    def call(self, input_tensor):
-        input_shape = tf.shape(input_tensor)
-        batch_size = input_shape[0]
-        x_dim = input_shape[1]
-        y_dim = input_shape[2]
-        
-        xx_ones = tf.ones([batch_size, x_dim], dtype=tf.int32)
-        xx_ones = tf.expand_dims(xx_ones, -1)
-        xx_range = tf.tile(tf.expand_dims(tf.range(x_dim), 0), [batch_size, 1])
-        xx_range = tf.expand_dims(xx_range, 1)
-        xx_channel = tf.matmul(xx_ones, xx_range)
-        xx_channel = tf.expand_dims(xx_channel, -1)
-        xx_channel = tf.cast(xx_channel, 'float32') / (tf.cast(x_dim, 'float32') - 1)
-        xx_channel = xx_channel*2 - 1
-        
-        yy_ones = tf.ones([batch_size, y_dim], dtype=tf.int32)
-        yy_ones = tf.expand_dims(yy_ones, 1)
-        yy_range = tf.tile(tf.expand_dims(tf.range(y_dim), 0), [batch_size, 1])
-        yy_range = tf.expand_dims(yy_range, -1)
-        yy_channel = tf.matmul(yy_range, yy_ones)
-        yy_channel = tf.expand_dims(yy_channel, -1)
-        yy_channel = tf.cast(yy_channel, 'float32') / (tf.cast(x_dim, 'float32') - 1)
-        yy_channel = yy_channel*2 - 1
-        
-        output_tensor = tf.concat([input_tensor, xx_channel, yy_channel], axis=-1)
-        if self.with_r:
-            rr = tf.sqrt(tf.square(xx_channel-0.5) + tf.square(yy_channel-0.5))
-            output_tensor = tf.concat([output_tensor, rr], axis=-1)
-        return output_tensor
-    
-    def compute_output_shape(self, input_shape):
-        output_shape = list(input_shape)
-        output_shape[3] = output_shape[3] + 2
-        if self.with_r:
-            output_shape[3] = output_shape[3] + 1
-        return tuple(output_shape)
-    
-    def get_config(self):
-        config = super(AddCoords2D, self).get_config()
-        config.update({
-            'with_r': self.with_r,
-        })
-        return config
-
-
-class LayerNormalization(Layer):
-    """Layer Normalization Layer.
-    
-    # References
-        [Layer Normalization](http://arxiv.org/abs/1607.06450)
-    """
-    def __init__(self, eps=1e-6, **kwargs):
-        super(LayerNormalization, self).__init__(**kwargs)
-        self.eps = eps
-    
-    def build(self, input_shape):
-        self.gamma = self.add_weight(name='gamma', shape=input_shape[-1:],
-                                     initializer=initializers.Ones(), trainable=True)
-        self.beta = self.add_weight(name='beta', shape=input_shape[-1:],
-                                    initializer=initializers.Zeros(), trainable=True)
-        super(LayerNormalization, self).build(input_shape)
-    
-    def call(self, x):
-        mean = K.mean(x, axis=-1, keepdims=True)
-        std = K.std(x, axis=-1, keepdims=True)
-        return self.gamma * (x - mean) / (std + self.eps) + self.beta
-    
-    def compute_output_shape(self, input_shape):
-        return input_shape
-
-    def get_config(self):
-        config = super(LayerNormalization, self).get_config()
-        config.update({
-            'eps': self.eps,
-        })
-        return config
-
-
-def Resize2D(size, method='bilinear'):
-    """Spatial resizing layer.
-    
-    # Arguments
-        size: spatial output size (rows, cols)
-        method: 'bilinear', 'bicubic', 'nearest', ...
-        
-    """
-    return Lambda(lambda x: tf.image.resize(x, size, method=method))
-
-
-class Blur2D(Layer):
-    """2D Blur Layer as used in Antialiased CNNs for Subsampling.
-    # Notes
-        The layer handles boundary effects similar to AvgPool2D.
-    # References
-        [Making Convolutional Networks Shift-Invariant Again](https://arxiv.org/abs/1904.11486)
-    # related code
-        https://github.com/adobe/antialiased-cnns
-        https://github.com/adobe/antialiased-cnns/issues/10
-    """
-    def __init__(self, filter_size=3, strides=2, padding='valid', **kwargs):
-        rank = 2
-        self.filter_size = filter_size
-        self.strides = conv_utils.normalize_tuple(strides, rank, 'strides')
-        self.padding = conv_utils.normalize_padding(padding)
-
-        if self.filter_size == 1:
-            self.a = np.array([1.,])
-        elif self.filter_size == 2:
-            self.a = np.array([1., 1.])
-        elif self.filter_size == 3:
-            self.a = np.array([1., 2., 1.])
-        elif self.filter_size == 4:
-            self.a = np.array([1., 3., 3., 1.])
-        elif self.filter_size == 5:
-            self.a = np.array([1., 4., 6., 4., 1.])
-        elif self.filter_size == 6:
-            self.a = np.array([1., 5., 10., 10., 5., 1.])
-        elif self.filter_size == 7:
-            self.a = np.array([1., 6., 15., 20., 15., 6., 1.])
-
-        super(Blur2D, self).__init__(**kwargs)
-
-    def compute_output_shape(self, input_shape):
-        feature_shape = input_shape
-        space = feature_shape[1:-1]
-
-        new_space = []
-        for i in range(len(space)):
-            new_dim = conv_utils.conv_output_length(
-                space[i],
-                self.kernel_size[i],
-                padding=self.padding,
-                stride=self.strides[i],
-                dilation=self.dilation_rate[i])
-            new_space.append(new_dim)
-
-        feature_shape = [feature_shape[0], *new_space, feature_shape[3]]
-        return feature_shape
-
-    def build(self, input_shape):
-        k = self.a[:,None] * self.a[None,:]
-        k = np.tile(k[:,:,None,None], (1,1,input_shape[-1],1))
-        self.kernel = K.constant(k, dtype=K.floatx())
-
-    def call(self, x):
-        features = K.depthwise_conv2d(x, self.kernel, strides=self.strides, padding=self.padding)
-        # normalize the features
-        mask = tf.ones_like(x)
-        norm = K.depthwise_conv2d(mask, self.kernel, strides=self.strides, padding=self.padding)
-        features = tf.multiply(features, 1./norm)
-        return features
-
-    def get_config(self):
-        config = super(Blur2D, self).get_config()
-        config.update({
-            'filter_size': self.filter_size,
-            'strides': self.strides,
-            'padding': self.padding,
-        })
-        return config
-
-
-class Scale(Layer):
-    """Layer to learn a linear feature scaling.
-    """
-    def __init__(self,
-                 use_shift=True,
-                 use_scale=True,
-                 shift_initializer='zeros',
-                 shift_regularizer=None,
-                 shift_constraint=None,
-                 scale_initializer='ones',
-                 scale_regularizer=None,
-                 scale_constraint=None,
-                 **kwargs):
-        super(Scale, self).__init__(**kwargs)
-        
-        self.use_shift = use_shift
-        self.use_scale = use_scale
-        self.shift_initializer = initializers.get(shift_initializer)
-        self.shift_regularizer = regularizers.get(shift_regularizer)
-        self.shift_constraint = constraints.get(shift_constraint)
-        self.scale_initializer = initializers.get(scale_initializer)
-        self.scale_regularizer = regularizers.get(scale_regularizer)
-        self.scale_constraint = constraints.get(scale_constraint)
-
-    def compute_output_shape(self, input_shape):
-        return input_shape
-    
-    def build(self, input_shape):
-        if self.use_shift:
-            self.shift = self.add_variable(name='shift',
-                                          shape=(input_shape[-1],),
-                                          initializer=self.shift_initializer,
-                                          regularizer=self.shift_regularizer,
-                                          constraint=self.shift_constraint,
-                                          trainable=True,
-                                          dtype=self.dtype)
+        if self.data_format == "channels_first":
+            data = tf.transpose(inputs, [0, 2, 3, 1])
         else:
-            self.shfit = None
-        
-        if self.use_scale:
-            self.scale = self.add_variable(name='scale',
-                                          shape=(input_shape[-1],),
-                                          initializer=self.scale_initializer,
-                                          regularizer=self.scale_regularizer,
-                                          constraint=self.scale_constraint,
-                                          trainable=True,
-                                          dtype=self.dtype)
-        else:
-            self.scale = None
+            data = inputs
+        n, h, w, c_i = tuple(data.get_shape().as_list())
+        data_shape = tf.shape(data)
+        """
+        The original implement in paper here bs is set as self.batch_size, here wo use data_shape[0],
+        because self.batch_size if constant value and can't changed, but actually image batch_size can
+        change in train and test period, so we use tf.shape to get actual dynamic batch_size.
+        """
 
-        super(Scale, self).build(input_shape)
-    
-    def call(self, inputs, **kwargs):
-        x = inputs
-        if self.use_scale:
-            x = tf.multiply(x, self.scale)
-        if self.use_shift:
-            x = tf.add(x, self.shift)
-        return x
+        offset = tf.stop_gradient(
+            distortion_aware_map(
+                w,
+                h,
+                self.kernel_size[0],
+                self.kernel_size[1],
+                s_width=self.s_strides,
+                s_height=self.s_strides,
+                bs=data_shape[0],
+            )
+        )
+        mask = tf.stop_gradient(
+            tf.ones(
+                shape=[
+                    data_shape[0],
+                    data_shape[1],
+                    data_shape[2],
+                    self.kernel_size[0] * self.kernel_size[1],
+                ]
+            )
+        )
+
+        # offset = tf.keras.layers.Conv2D(filters=self.kernel_size[0] * self.kernel_size[1] * 2, kernel_size=(3, 3), padding='same',use_bias=False)(offset)
+        offset = tf.multiply(self.scale, offset)
+        data = tf.transpose(data, [0, 3, 1, 2])
+        offset = tf.transpose(offset, [0, 3, 1, 2])
+
+        mask = tf.transpose(mask, [0, 3, 1, 2])
+        res = _deformable_conv2d(
+            data,
+            self.kernel,
+            offset,
+            mask,
+            [1, 1, self.strides[0], self.strides[1]],
+            num_groups=self.num_groups,
+            deformable_groups=self.deformable_groups,
+            padding=self.tf_pad,
+            data_format="NCHW",
+        )
+        # print(res.shape)
+        if self.use_bias:
+            res = tf.add(res, self.bias)
+        if self.use_relu:
+            res = tf.nn.relu(res)
+        if self.data_format == "channels_last":
+            return tf.transpose(res, [0, 2, 3, 1])
+        else:
+            return res
 
     def get_config(self):
-        config = super(Scale, self).get_config()
-        config.update({
-            'use_shift': self.use_shift,
-            'use_scale': self.use_scale,
-            'shift_initializer': initializers.serialize(self.shift_initializer),
-            'shift_regularizer': regularizers.serialize(self.shift_regularizer),
-            'shift_constraint': constraints.serialize(self.shift_constraint),
-            'scale_initializer': initializers.serialize(self.scale_initializer),
-            'scale_regularizer': regularizers.serialize(self.scale_regularizer),
-            'scale_constraint': constraints.serialize(self.scale_constraint),
-        })
-        return config
+        config = {
+            "filters": self.filters,
+            "kernel_size": self.kernel_size,
+            "num_groups": self.num_groups,
+            "deformable_groups": self.deformable_groups,
+            "strides": self.strides,
+            "im2col": self.im2col,
+            "use_bias": self.use_bias,
+            "padding": self.padding,
+            "data_format": self.data_format,
+            "dilations": self.dilations,
+            "use_relu": self.use_relu,
+            "kernel_initializer": tf.keras.initializers.serialize(
+                self.kernel_initializer
+            ),
+            "kernel_regularizer": tf.keras.regularizers.serialize(
+                self.kernel_regularizer
+            ),
+            "kernel_constraint": tf.keras.constraints.serialize(self.kernel_constraint),
+            "tf_pad": self.tf_pad,
+        }
+        base_config = super().get_config()
+        return {**base_config, **config}
