@@ -21,16 +21,16 @@ from tensorflow.keras.layers import Input, Lambda, Dense, Dropout, Softmax, Flat
 from tensorflow.keras.layers import MaxPool2D, AvgPool2D, MaxPool3D, AvgPool3D
 from tensorflow.keras.initializers import HeUniform
 from scipy.ndimage import map_coordinates
-from yuv2rgb import yuv2rgb
+from utils.yuv2rgb import yuv2rgb
 from utils import InstanceNormalization
-from AdvancedLayers import GroupConv2D
+from utils.AdvancedLayers import GroupConv2D, CHConv
 from fast_soft_sort.tf_utils import soft_rank, soft_sort
 from PIL import Image
-from vp_model import _vp_model, SphericalProjection
-from erp_model import _erp_detector, _erp_descriptor, pers_crop
-from equilib import equi2equi
-from erp_model import get_grid
-os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+from model.vp_model import _vp_model, SphericalProjection
+from model.erp_model import _erp_detector, _erp_descriptor
+from loss.joint_loss import get_vp_loss, get_erp_loss
+from utils.equilib import equi2equi
+from model.erp_model import get_grid
 
 e_featuremap, e_detector = _erp_detector()
 v_feature, v_detector, descriptor, v_model = _vp_model()

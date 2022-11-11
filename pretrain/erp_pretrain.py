@@ -21,19 +21,21 @@ from tensorflow.keras.layers import Input, Lambda, Dense, Dropout, Softmax, Flat
 from tensorflow.keras.layers import MaxPool2D, AvgPool2D, MaxPool3D, AvgPool3D
 from tensorflow.keras.initializers import HeUniform
 from scipy.ndimage import map_coordinates
-from yuv2rgb import yuv2rgb
+from utils.yuv2rgb import yuv2rgb
 from utils import InstanceNormalization
-from AdvancedLayers import GroupConv2D
+from utils.AdvancedLayers import GroupConv2D, CHConv
 from fast_soft_sort.tf_utils import soft_rank, soft_sort
 from PIL import Image
-from vp_model import _vp_model, SphericalProjection
-from erp_model import _erp_detector, _erp_descriptor
-os.environ['CUDA_VISIBLE_DEVICES'] = '3'
+from model.vp_model import _vp_model, SphericalProjection
+from model.erp_model import _erp_detector, _erp_descriptor
+from loss.erp_loss import get_loss
 
 scenarios = os.listdir('../data/panoContext_data_erp/')
-# scenarios = ['bedroom']
 epochs = 100
 optimizer = tf.optimizers.Adam(learning_rate=1e-3)
+
+e_featuremap, e_detector = _erp_detector()
+v_feature, v_detector, descriptor, v_model = _vp_model()
 
 for epoch in range(epochs):
     print("Epochs: {}".format(str(epoch + 1)))
@@ -50,7 +52,6 @@ for epoch in range(epochs):
             if image[0:4] != 'pano':
                 break
             train_log = open('../log/erp/train_logging.txt', 'a+')
-            # image = "pano_0019e0a0c8ca0913e543c033a843c58f"
             print("{0}/{1} image: {2}".format(str(i + 1), total_img, image))
             print("----------------------")
             

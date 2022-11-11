@@ -21,20 +21,20 @@ from tensorflow.keras.layers import Input, Lambda, Dense, Dropout, Softmax, Flat
 from tensorflow.keras.layers import MaxPool2D, AvgPool2D, MaxPool3D, AvgPool3D
 from tensorflow.keras.initializers import HeUniform
 from scipy.ndimage import map_coordinates
-from yuv2rgb import yuv2rgb
+from utils.yuv2rgb import yuv2rgb
 from utils import InstanceNormalization
-from AdvancedLayers import GroupConv2D
+from utils.AdvancedLayers import GroupConv2D, CHConv
 from fast_soft_sort.tf_utils import soft_rank, soft_sort
 from PIL import Image
-from vp_model import _vp_model, SphericalProjection
-from erp_model1 import _erp_detector, _erp_descriptor, pers_crop
-from equilib import equi2equi
-from erp_model import get_grid
-os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+from model.vp_model import _vp_model, SphericalProjection
+from model.erp_model import _erp_detector, _erp_descriptor
+from loss.vp_loss import get_loss
 
 scenarios = os.listdir('./data/panoContext_data_vp')
 epochs = 100
 optimizer = tf.optimizers.Adam(learning_rate=1e-3)
+
+v_feature, v_detector, descriptor, v_model = _vp_model()
 
 for epoch in range(epochs):
     print("Epochs: {}".format(str(epoch + 1)))
@@ -48,7 +48,6 @@ for epoch in range(epochs):
         total_img = len(images)
         
         for i, image in enumerate(images):
-            # image = "pano_0019e0a0c8ca0913e543c033a843c58f"
             print("{0}/{1} image: {2}".format(str(i + 1), total_img, image))
             print("----------------------")
             views = os.listdir('./data/panoContext_data_vp/' + scenario + '/' + image)
@@ -62,13 +61,10 @@ for epoch in range(epochs):
                     # print("Pair: {}/1".format(int(j + 1)))
                     # print("----------------------")
                     
-                    id_1 = np.random.randint(1, 4)
-                    # id_1 = 1
-                    id_2 = np.random.randint(1, 4)
+                    id_1 = np.random.randint(1, 36)
+                    id_2 = np.random.randint(1, 36)
                     while id_2 == id_1:
-                        id_2 = np.random.randint(1, 4)
-                    # id_2 = 2
-                    # print(id_1, id_2)
+                        id_2 = np.random.randint(1, 36)
                     paras = open('./data/panoContext_data_vp/' + scenario + '/' + image + '/' + 
                                  view + '/imagelist.txt', 'r').readlines()
                         
