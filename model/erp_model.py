@@ -21,9 +21,11 @@ from tensorflow.keras.layers import Input, Lambda, Dense, Dropout, Softmax, Flat
 from tensorflow.keras.layers import MaxPool2D, AvgPool2D, MaxPool3D, AvgPool3D
 from tensorflow.keras.initializers import HeUniform
 from scipy.ndimage import map_coordinates
-from yuv2rgb import yuv2rgb
+from utils.yuv2rgb import yuv2rgb
 from utils import InstanceNormalization
-from AdvancedLayers import GroupConv2D
+from utils.AdvancedLayers import GroupConv2D, CHConv
+from fast_soft_sort.tf_utils import soft_rank, soft_sort
+from PIL import Image
 from fast_soft_sort.tf_utils1 import soft_rank, soft_sort
 from PIL import Image
 from equilib import equi2equi
@@ -114,28 +116,33 @@ def _feature_extractor():
     
     input_tensor = Input(shape=(256, 512, 3), name='input_feature')
     # input_tensor = Input(shape=(None, None, 3), name='input_feature')
-    # x = EquiConv(filters = 8, kernel_size = (3, 3), padding = 'same', kernel_regularizer=regularizers.l2(0.01), kernel_initializer=HeUniform())(input_tensor)
-    x = Conv2D(filters = 8, kernel_size = (3, 3), padding = 'same', kernel_regularizer=regularizers.l2(0.01))(input_tensor)
+    x = CHConv(filters = 8, kernel_size = (3, 3), padding = 'same', kernel_regularizer=regularizers.l2(0.01),
+               kernel_initializer=HeUniform())(input_tensor)
     x = InstanceNormalization()(x)
     x = Activation('relu')(x)
-    
-    x = Conv2D(filters = 8, kernel_size = (3, 3), padding = 'same', kernel_regularizer=regularizers.l2(0.01))(x)
+
+    x = CHConv(filters=8, kernel_size=(3, 3), padding='same', kernel_regularizer=regularizers.l2(0.01),
+               kernel_initializer=HeUniform())(input_tensor)
     x = InstanceNormalization()(x)
     x = Activation('relu')(x)
-    
-    x = Conv2D(filters = 8, kernel_size = (3, 3), padding = 'same', kernel_regularizer=regularizers.l2(0.01))(x)
+
+    x = CHConv(filters=8, kernel_size=(3, 3), padding='same', kernel_regularizer=regularizers.l2(0.01),
+               kernel_initializer=HeUniform())(input_tensor)
     x = InstanceNormalization()(x)
     x = Activation('relu')(x)
-    
-    x = Conv2D(filters = 8, kernel_size = (3, 3), padding = 'same', kernel_regularizer=regularizers.l2(0.01))(x)
+
+    x = CHConv(filters=8, kernel_size=(3, 3), padding='same', kernel_regularizer=regularizers.l2(0.01),
+               kernel_initializer=HeUniform())(input_tensor)
     x = InstanceNormalization()(x)
     x = Activation('relu')(x)
-    
-    x = Conv2D(filters = 8, kernel_size = (3, 3), padding = 'same', kernel_regularizer=regularizers.l2(0.01))(x)
+
+    x = CHConv(filters=8, kernel_size=(3, 3), padding='same', kernel_regularizer=regularizers.l2(0.01),
+               kernel_initializer=HeUniform())(input_tensor)
     x = InstanceNormalization()(x)
     x = Activation('relu')(x)
-    
-    x = Conv2D(filters = 1, kernel_size = (1, 1), padding = 'same', kernel_regularizer=regularizers.l2(0.01))(x)
+
+    x = CHConv(filters=1, kernel_size=(3, 3), padding='same', kernel_regularizer=regularizers.l2(0.01),
+               kernel_initializer=HeUniform())(input_tensor)
 
     x = InstanceNormalization()(x)
     x = Activation('relu')(x)

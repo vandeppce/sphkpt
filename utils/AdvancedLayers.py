@@ -7,6 +7,10 @@ from tensorflow.python.keras.layers import InputSpec
 from tensorflow.python.ops import nn_ops
 from tensorflow.python.keras import initializers, regularizers, constraints, activations
 from tensorflow.python.keras.utils import conv_utils
+import tensorflow_addons as tfa
+from tensorflow_addons.utils import types
+from tensorflow.python.keras.utils import conv_utils
+from tensorflow_addons.layers.deformable_conv2d import _deformable_conv2d
 
 class Covn2DBaseLayer(Layer):
     """Basic Conv2D class from which other layers inherit.
