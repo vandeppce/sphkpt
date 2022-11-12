@@ -2,7 +2,14 @@
 SphKpt is a uniform framework for detecting keypoints on both omnidirectional and perspective images.
 
 ## Dependencies
-pip install -r requirements.txt
+* numpy
+* scipy
+* matplotlib
+* opencv-python
+* opencv-contrib-python
+* pillow
+* tensorflow >= 2.0
+* tensorflow_addons
 
 ## Train the framework
 * Run pretrain/vp_pretrain.py to pre-train the perspective module.
