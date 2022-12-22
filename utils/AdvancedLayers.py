@@ -487,7 +487,14 @@ class CHConv(tf.keras.layers.Layer):
             trainable=True,
             name="s"
         )
-
+        self.kp_bias = self.add_weight(
+            shape=[input_shape[1], input_shape[2], self.kernel_size[0] * self.kernel_size[1] * 2],
+            initializer=self.kernel_initializer,
+            regularizer=self.kernel_regularizer,
+            constraint=self.kernel_constraint,
+            trainable=True,
+            name="kb"
+        )
         if self.use_bias:
             self.bias = self.add_weight(
                 shape=[1, self.filters, 1, 1],
@@ -563,7 +570,7 @@ class CHConv(tf.keras.layers.Layer):
         )
 
         # offset = tf.keras.layers.Conv2D(filters=self.kernel_size[0] * self.kernel_size[1] * 2, kernel_size=(3, 3), padding='same',use_bias=False)(offset)
-        offset = tf.multiply(self.scale, offset)
+        offset = tf.add(tf.multiply(self.scale, offset), self.kp_bias)
         data = tf.transpose(data, [0, 3, 1, 2])
         offset = tf.transpose(offset, [0, 3, 1, 2])
 
